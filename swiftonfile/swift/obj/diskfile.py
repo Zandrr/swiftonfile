@@ -51,7 +51,8 @@ from swiftonfile.swift.common.utils import X_CONTENT_TYPE, \
 from ConfigParser import ConfigParser, NoSectionError, NoOptionError
 from swift.obj.diskfile import DiskFileManager as SwiftDiskFileManager
 from swift.obj.diskfile import get_async_dir
-
+from gluster import gfapi
+logging.basicConfig(filename='campbell_logs.log',level=logging.DEBUG)
 # FIXME: Hopefully we'll be able to move to Python 2.7+ where O_CLOEXEC will
 # be back ported. See http://www.python.org/dev/peps/pep-0433/
 O_CLOEXEC = 02000000
@@ -261,15 +262,17 @@ class DiskFileWriter(object):
 
 
     """
+    logging.debug("inside writer obj")
     def __init__(self, fd, tmppath, disk_file):
         # Parameter tracking
         self._fd = fd
         self._tmppath = tmppath
         self._disk_file = disk_file
-
+        logging.debug('fd is: %s, tmppath is: %s, diskfile is: %s'%(fd,tmppath,disk_file))  
         # Internal attributes
         self._upload_size = 0
         self._last_sync = 0
+
 
     def _write_entire_chunk(self, chunk):
         bytes_per_sync = self._disk_file._mgr.bytes_per_sync
@@ -288,7 +291,9 @@ class DiskFileWriter(object):
         """
         Close the file descriptor
         """
+        logging.debug('fd is inside of close diskfile %s'%self._fd)
         if self._fd:
+            logging.debug('self.fd inside close is %s'%self._fd)
             do_close(self._fd)
             self._fd = None
 
@@ -592,15 +597,17 @@ class DiskFile(object):
         self._fd = None
         # Don't store a value for data_file until we know it exists.
         self._data_file = None
-
+        
+        #Volume mounting
+        self.volume = gfapi.Volume('server0','volume1')
         # Account name contains resller_prefix which is retained and not
         # stripped. This to conform to Swift's behavior where account name
         # entry in Account DBs contain resller_prefix.
         self._account = account
         self._container = container
-
-        self._container_path = \
-            os.path.join(self._device_path, self._account, self._container)
+        #TODO: remove /test/
+        self._container_path = os.path.join("test", self._account, self._container)
+        logging.debug("inside init container path is %s"%self._container_path)
         obj = obj.strip(os.path.sep)
         obj_path, self._obj = os.path.split(obj)
         if obj_path:
@@ -636,8 +643,11 @@ class DiskFile(object):
         :returns: itself for use as a context manager
         """
         # Writes are always performed to a temporary file
+        #logging.debug("device path is %s"%(self._device_path))
+        #logging.debug("container path is %s"%(self._container_path))
         try:
-            fd = do_open(self._data_file, os.O_RDONLY | O_CLOEXEC)
+            logging.debug("we are before fd %s volume is %s"%(self._data_file, self.volume))
+            fd = do_open(self.volume, self._data_file, os.O_RDWR|os.O_CREAT|os.O_APPEND)
         except SwiftOnFileSystemOSError as err:
             if err.errno in (errno.ENOENT, errno.ENOTDIR):
                 # If the file does exist, or some part of the path does not
@@ -645,7 +655,9 @@ class DiskFile(object):
                 raise DiskFileNotExist
             raise
         else:
+            logging.debug("fd before do fstat is %s"%(fd))
             stats = do_fstat(fd)
+            logging.debug("stats after do_fstat is %s"%stats)
             if not stats:
                 return
             self._is_dir = stat.S_ISDIR(stats.st_mode)
@@ -657,7 +669,7 @@ class DiskFile(object):
             self._metadata = read_metadata(fd)
         assert self._metadata is not None
         self._filter_metadata()
-
+        logging.debug('aefa')
         if self._is_dir:
             do_close(fd)
             obj_size = 0
@@ -851,16 +863,20 @@ class DiskFile(object):
         :raises AlreadyExistsAsFile: if path or part of a path is not a \
                                      directory
         """
-        # Create /account/container directory structure on mount point root
+        # Create /atccount/container directory structure on mount point root
         try:
-            os.makedirs(self._container_path)
+            #TODO:USE LIBGFAPI
+            #TODO: log info about volume to make sure you have the correct volume object
+            #do_open('root_of_volume', os.O_CREAT|os.O_RDWR)
+            #TODO: maybe create dummy file in root of volume just to doulbe check
+            logging.debug('AFTER MAKEDIRS')
+
         except OSError as err:
             if err.errno != errno.EEXIST:
                 raise
 
         data_file = os.path.join(self._put_datadir, self._obj)
-
-        # Assume the full directory path exists to the file already, and
+                # Assume the full directory path exists to the file already, and
         # construct the proper name for the temporary file.
         attempts = 1
         cur_thread = str(getcurrent())
@@ -868,10 +884,13 @@ class DiskFile(object):
             postfix = md5(self._obj + _cur_host + _cur_pid + cur_thread
                           + str(random.random())).hexdigest()
             tmpfile = '.' + self._obj + '.' + postfix
+            #tmppath = os.path.join("/test/", tmpfile)
             tmppath = os.path.join(self._put_datadir, tmpfile)
             try:
-                fd = do_open(tmppath,
+                #TODO change tmppath to remove FUSE prefix /mnt/swiftonfile
+                fd = do_open(self.volume,tmppath,
                              os.O_WRONLY | os.O_CREAT | os.O_EXCL | O_CLOEXEC)
+                logging.debug("after do open in create diskfile fd is %s"%fd)
             except SwiftOnFileSystemOSError as gerr:
                 if gerr.errno in (errno.ENOSPC, errno.EDQUOT):
                     # Raise DiskFileNoSpace to be handled by upper layers when
@@ -892,9 +911,9 @@ class DiskFile(object):
                     raise DiskFileError('DiskFile.mkstemp(): failed to'
                                         ' successfully create a temporary file'
                                         ' without running into a name conflict'
-                                        ' after %d of %d attempts for: %s' % (
+                                        ' after %d of %d attempts for: %s, and errno is %s' % (
                                             attempts, MAX_OPEN_ATTEMPTS,
-                                            data_file))
+                                            data_file, gerr.errno))
                 if gerr.errno == errno.EEXIST:
                     # Retry with a different random number.
                     attempts += 1
@@ -932,13 +951,15 @@ class DiskFile(object):
         dw = None
         try:
             # Ensure it is properly owned before we make it available.
-            do_fchown(fd, self._uid, self._gid)
+            #do_fchown(fd, self._uid, self._gid)
             # NOTE: we do not perform the fallocate() call at all. We ignore
             # it completely since at the time of this writing FUSE does not
             # support it.
             dw = DiskFileWriter(fd, tmppath, self)
+            logging.debug("fd is  %s, dw is %s "%(fd, dw))
             yield dw
         finally:
+            logging.debug("right before dw.close(), %s "%dw)
             dw.close()
             if dw._tmppath:
                 do_unlink(dw._tmppath)

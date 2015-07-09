@@ -27,13 +27,23 @@ from eventlet import sleep
 from swift.common.utils import load_libc_function
 from swiftonfile.swift.common.exceptions import SwiftOnFileSystemOSError
 from swift.common.exceptions import DiskFileNoSpace
+from gluster import gfapi
+logging.basicConfig(filename='campbell_logs.log',level=logging.DEBUG)
+
 
 
 def do_getxattr(path, key):
-    return xattr.getxattr(path, key)
+    #return xattr.getxattr(path, key)i
+    logging.debug("key is %s"%key)
+    logging.debug("path in do_getxattr is %s"%path)
+    volume = gfapi.Volume('server0','volume1')
+    volume.mount()
+    xattr = path.fgetxattr(key)
+    return xattr
 
 
 def do_setxattr(path, key, value):
+
     xattr.setxattr(path, key, value)
 
 
@@ -47,7 +57,7 @@ def do_walk(*args, **kwargs):
 
 def do_write(fd, buf):
     try:
-        cnt = os.write(fd, buf)
+        cnt = fd.write(buf)
     except OSError as err:
         filename = get_filename_from_fd(fd)
         if err.errno in (errno.ENOSPC, errno.EDQUOT):
@@ -135,7 +145,7 @@ def do_chown(path, uid, gid):
 
 def do_fchown(fd, uid, gid):
     try:
-        os.fchown(fd, uid, gid)
+        fd.fchown(uid, gid)
     except OSError as err:
         raise SwiftOnFileSystemOSError(
             err.errno, '%s, os.fchown(%s, %s, %s)' % (
@@ -176,20 +186,28 @@ def do_stat(path):
 
 def do_fstat(fd):
     try:
-        stats = os.fstat(fd)
+        logging.debug("before fstat in fs_utls %s"%(fd))
+        stats = fd.fstat()
+        logging.debug("after fstat in fs_utils %s"%(stats))
     except OSError as err:
         raise SwiftOnFileSystemOSError(
             err.errno, '%s, os.fstat(%s)' % (err.strerror, fd))
+    logging.debug('before return stats')
     return stats
 
 
-def do_open(path, flags, **kwargs):
+def do_open(volume, path, flags, **kwargs):
+    logging.debug("flags are %s, path is %s"%(flags,path))
     try:
-        fd = os.open(path, flags, **kwargs)
+        volume.mount()
+        fdi = volume.open(path, flags)
+        fd = gfapi.File(fdi,path, 'a+')
+        logging.debug('fd is %s'%fd)
     except OSError as err:
         raise SwiftOnFileSystemOSError(
             err.errno, '%s, os.open("%s", %x, %r)' % (
                 err.strerror, path, flags, kwargs))
+    #volume.umount()
     return fd
 
 
@@ -199,7 +217,7 @@ def do_dup(fd):
 
 def do_close(fd):
     try:
-        os.close(fd)
+        fd.close()
     except OSError as err:
         if err.errno in (errno.ENOSPC, errno.EDQUOT):
             filename = get_filename_from_fd(fd)
