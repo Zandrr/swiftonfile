@@ -34,17 +34,28 @@ logging.basicConfig(filename='campbell_logs.log',level=logging.DEBUG)
 
 def do_getxattr(path, key):
     #return xattr.getxattr(path, key)i
-    logging.debug("key is %s"%key)
-    logging.debug("path in do_getxattr is %s"%path)
-    volume = gfapi.Volume('server0','volume1')
-    volume.mount()
-    xattr = path.fgetxattr(key)
-    return xattr
-
+    # logging.debug("key is %s"%key)
+    # logging.debug("path in do_getxattr is %s"%path)
+    try:
+        if(isinstance(path, gfapi.File)):
+            return path.fgetxattr(key)
+        elif(isinstance(path, str)):
+            volume = gfapi.Volume('server0','volume1')
+            volume.mount()
+            return volume.getxattr(path,key)
+    except OSError as err:
+        raise err
 
 def do_setxattr(path, key, value):
-
-    xattr.setxattr(path, key, value)
+    try:
+        if(isinstance(path, gfapi.File)):
+            path.fsetxattr(key, value)
+        elif(isinstance(path, str)):
+            volume = gfapi.Volume('server0','volume1')
+            volume.mount()
+            volume.setxattr(path, key, value)
+    except OSError as err:
+        raise err
 
 
 def do_removexattr(path, key):
@@ -199,15 +210,16 @@ def do_fstat(fd):
 def do_open(volume, path, flags, **kwargs):
     logging.debug("flags are %s, path is %s"%(flags,path))
     try:
+        logging.debug("vol is %s"%volume)
         volume.mount()
         fdi = volume.open(path, flags)
         fd = gfapi.File(fdi,path, 'a+')
+        # fd = volume.fopen(path, flags)
         logging.debug('fd is %s'%fd)
     except OSError as err:
         raise SwiftOnFileSystemOSError(
             err.errno, '%s, os.open("%s", %x, %r)' % (
                 err.strerror, path, flags, kwargs))
-    #volume.umount()
     return fd
 
 

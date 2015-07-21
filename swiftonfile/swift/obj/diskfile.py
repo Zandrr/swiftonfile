@@ -630,7 +630,7 @@ class DiskFile(object):
         #logging.debug("container path is %s"%(self._container_path))
         try:
             logging.debug("we are before fd %s volume is %s"%(self._data_file, self.volume))
-            fd = do_open(self.volume, self._data_file, os.O_RDWR|os.O_CREAT|os.O_APPEND)
+            fd = do_open(self.volume, self._data_file, os.O_CREAT|os.O_RDWR|os.O_APPEND)
         except SwiftOnFileSystemOSError as err:
             if err.errno in (errno.ENOENT, errno.ENOTDIR):
                 # If the file does exist, or some part of the path does not
@@ -642,22 +642,26 @@ class DiskFile(object):
             stats = do_fstat(fd)
             logging.debug("stats after do_fstat is %s"%stats)
             if not stats:
+                logging.debug("NOT STATS")
                 return
             self._is_dir = stat.S_ISDIR(stats.st_mode)
             obj_size = stats.st_size
 
         self._metadata = read_metadata(fd)
+        logging.exception("self.meta is %s"%self._metadata)
         if not validate_object(self._metadata):
             create_object_metadata(fd)
             self._metadata = read_metadata(fd)
+            logging.debug("not validate_object")
         assert self._metadata is not None
+        logging.debug("metadata is not NONE")
         self._filter_metadata()
-        logging.debug('aefa')
         if self._is_dir:
             do_close(fd)
             obj_size = 0
             self._fd = -1
         else:
+            logging.debug("OTHER!")
             if self._is_object_expired(self._metadata):
                 raise DiskFileExpired(metadata=self._metadata)
             self._fd = fd

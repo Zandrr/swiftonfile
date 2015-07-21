@@ -46,6 +46,8 @@ DEFAULT_UID = -1
 DEFAULT_GID = -1
 PICKLE_PROTOCOL = 2
 CHUNK_SIZE = 65536
+logging.basicConfig(filename='campbell_logs.log',level=logging.DEBUG)
+
 
 
 def normalize_timestamp(timestamp):
@@ -76,8 +78,11 @@ def read_metadata(path_or_fd):
     key = 0
     while metadata is None:
         try:
-            metadata_s += do_getxattr(path_or_fd,
-                                      '%s%s' % (METADATA_KEY, (key or '')))
+            logging.debug("BEFORE setting metadata it is %s path or fd is %s, and metadata_key is %s"\
+                            %(metadata_s, path_or_fd, METADATA_KEY))
+            metadata_s += do_getxattr(path_or_fd, METADATA_KEY)
+            #metadata_s += "test"
+            logging.debug("AFTER setting metadata it is %s"%metadata_s)                                   
         except IOError as err:
             if err.errno == errno.ENODATA:
                 if key > 0:
